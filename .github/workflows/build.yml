@@ -26,6 +26,18 @@ jobs:
           java-version: 17
           cache: 'gradle'
 
+      # Chaquopy runs the host Python interpreter to package each flavor's
+      # requirements. Keep both flavor versions on PATH for the build.
+      - name: Setup Python 3.11 (standard flavor)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Python 3.13 (impersonation flavor)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
