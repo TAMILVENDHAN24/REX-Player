@@ -37,7 +37,7 @@ jobs:
 
       - name: Verify build output
         run: |
-          RELEASE_DIR="app/build/outputs/apk/release"
+          RELEASE_DIR="app/build/outputs/apk/standard/release"
           if [ ! -d "$RELEASE_DIR" ]; then
             echo "Release directory does not exist!"
             find app/build/outputs -name "*.apk" -type f
@@ -48,7 +48,7 @@ jobs:
       - name: Sign APKs
         run: |
           set -e
-          RELEASE_DIR="app/build/outputs/apk/release"
+          RELEASE_DIR="app/build/outputs/apk/standard/release"
           
           echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 -d > release.keystore
           
@@ -83,7 +83,7 @@ jobs:
           set -euo pipefail
           apks=("universal" "arm64-v8a" "armeabi-v7a" "x86" "x86_64")
           for abi in "${apks[@]}"; do
-            src="app/build/outputs/apk/release/app-${abi}-release.apk"
+            src="app/build/outputs/apk/standard/release/app-standard-${abi}-release.apk"
             dst="REX-Player-${abi}-${VERSION_TAG}.apk"
             if [ ! -f "$src" ]; then
               echo "::error file=$src::Signed APK for $abi was not found"

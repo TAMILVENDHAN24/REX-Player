@@ -49,7 +49,7 @@ jobs:
       - name: Sign APKs
         run: |
           set -e
-          RELEASE_DIR="app/build/outputs/apk/preview"
+          RELEASE_DIR="app/build/outputs/apk/standard/preview"
           
           echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 -d > release.keystore
           
@@ -94,7 +94,7 @@ jobs:
           mkdir -p output
           
           for arch in "${apks[@]}"; do
-            src="app/build/outputs/apk/preview/app-${arch}-preview.apk"
+            src="app/build/outputs/apk/standard/preview/app-standard-${arch}-preview.apk"
             dest="output/REX-Player-preview-r${commit_count}-${arch}.apk"
             
             if [ ! -f "$src" ]; then

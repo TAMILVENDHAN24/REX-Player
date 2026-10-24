@@ -37,7 +37,7 @@ jobs:
 
       - name: Verify build output
         run: |
-          PREVIEW_DIR="app/build/outputs/apk/preview"
+          PREVIEW_DIR="app/build/outputs/apk/standard/preview"
           if [ ! -d "$PREVIEW_DIR" ]; then
             echo "Preview directory does not exist!"
             find app/build/outputs -name "*.apk" -type f
@@ -48,7 +48,7 @@ jobs:
       - name: Sign APKs
         run: |
           set -e
-          PREVIEW_DIR="app/build/outputs/apk/preview"
+          PREVIEW_DIR="app/build/outputs/apk/standard/preview"
           
           echo "${{ secrets.SIGNING_KEYSTORE }}" | base64 -d > release.keystore
           
@@ -80,7 +80,7 @@ jobs:
           declare -a apks=("universal" "arm64-v8a" "armeabi-v7a" "x86" "x86_64")
 
           for abi in "${apks[@]}"; do
-            src="app/build/outputs/apk/preview/app-${abi}-preview.apk"
+            src="app/build/outputs/apk/standard/preview/app-standard-${abi}-preview.apk"
             dest="preview/REX-Player-preview-${abi}-${{ env.VERSION_TAG }}.apk"
             if [ -f "$src" ]; then
               cp "$src" "$dest"

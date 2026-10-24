@@ -4,9 +4,19 @@ import traceback
 
 import yt_dlp
 
+try:
+    import curl_cffi  # noqa: F401
+    CURL_CFFI_AVAILABLE = True
+except Exception:
+    CURL_CFFI_AVAILABLE = False
+
 
 def version():
     return yt_dlp.version.__version__
+
+
+def supports_impersonation():
+    return CURL_CFFI_AVAILABLE
 
 
 def _options(raw):
@@ -27,6 +37,8 @@ def _options(raw):
         "geo_bypass": bool(request.get("geo_bypass", True)),
         "http_headers": headers,
     }
+    if CURL_CFFI_AVAILABLE:
+        opts["impersonate"] = "chrome"
     if request.get("format"):
         opts["format"] = request["format"]
     if request.get("proxy"):

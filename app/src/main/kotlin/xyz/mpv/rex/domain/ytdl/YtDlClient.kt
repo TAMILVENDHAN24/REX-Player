@@ -91,6 +91,12 @@ class YtDlClient(
             .onFailure { Log.e(TAG, "Bundled yt-dlp runtime failed to start", it) }.getOrDefault(false)
     }
 
+    suspend fun supportsBrowserImpersonation(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            pythonMutex.withLock { module().getModule("rex_ytdlp").callAttr("supports_impersonation").toJava(Boolean::class.javaObjectType) }
+        }.getOrDefault(false)
+    }
+
     suspend fun getStatus(): YtdlpStatus = withContext(Dispatchers.IO) {
         runCatching {
             val version = pythonMutex.withLock { module().getModule("rex_ytdlp").callAttr("version").toJava(String::class.java) }

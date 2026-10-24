@@ -99,6 +99,7 @@ object YtdlSettingsScreen : Screen {
 
         var isAddonInstalled by remember { mutableStateOf(ytDlClient.isAddonInstalled()) }
         var ytdlpStatus by remember { mutableStateOf<YtdlpStatus?>(null) }
+        var supportsImpersonation by remember { mutableStateOf(false) }
         var isRefreshingStatus by remember { mutableStateOf(false) }
 
         // Update dialog state
@@ -119,8 +120,10 @@ object YtdlSettingsScreen : Screen {
                 isAddonInstalled = ytDlClient.isAddonInstalled()
                 if (isAddonInstalled) {
                     ytdlpStatus = ytDlClient.getStatus()
+                    supportsImpersonation = ytDlClient.supportsBrowserImpersonation()
                 } else {
                     ytdlpStatus = null
+                    supportsImpersonation = false
                 }
                 isRefreshingStatus = false
             }
@@ -195,7 +198,15 @@ object YtdlSettingsScreen : Screen {
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
-                                    Text("Scraper and player are in one app. Updates arrive with player releases.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                                    Text(
+                                        text = if (supportsImpersonation) {
+                                            "Browser impersonation is enabled. Updates arrive with player releases."
+                                        } else {
+                                            "Scraper is built in. Browser impersonation is available in the arm64 build."
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                    )
                                 }
                                 if (isRefreshingStatus) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                             }
