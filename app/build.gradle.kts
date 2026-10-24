@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.kotlinx.serialization)
   alias(libs.plugins.ksp)
   alias(libs.plugins.room)
+  id("com.chaquo.python")
 }
 
 android {
@@ -17,6 +18,7 @@ android {
     applicationId = "xyz.mpv.rex"
     minSdk = 26
     targetSdk = 36
+    ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") }
     versionCode = 214
     versionName = "5.3.0"
 
@@ -122,6 +124,13 @@ android {
   @Suppress("UnstableApiUsage")
   androidResources {
     generateLocaleConfig = true
+  }
+}
+
+chaquopy {
+  defaultConfig {
+    version = "3.11"
+    pip { install("yt-dlp==2026.10.21") }
   }
 }
 

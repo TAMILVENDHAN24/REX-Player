@@ -175,58 +175,32 @@ object YtdlSettingsScreen : Screen {
                         bottom = navBarHeight + 24.dp,
                     ),
                 ) {
-                    // Section 1: Addon Status Card
+                    // Bundled yt-dlp status
                     item {
-                        Box(
-                            modifier = Modifier
-                                .padding(horizontal = 16.dp, vertical = 6.dp)
-                                .preferenceHighlight("yt-dlp", RoundedCornerShape(24.dp))
+                        Card(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp).fillMaxWidth(),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
                         ) {
-                            if (!isAddonInstalled) {
-                                AddonNotInstalledCard(
-                                    onDownloadClick = {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ADDON_GITHUB_RELEASES_URL))
-                                        context.startActivity(intent)
-                                    },
-                                    onRefreshClick = { refreshStatus() }
-                                )
-                            } else {
-                                AddonInstalledCard(
-                                    status = ytdlpStatus,
-                                    isRefreshing = isRefreshingStatus,
-                                    onInstall = {
-                                        showUpdateDialog = true
-                                        isUpdating = true
-                                        updateLogs = "Installing yt-dlp into companion add-on...\n"
-                                        updateSuccess = null
-                                        scope.launch {
-                                            val success = ytDlClient.runInstall { logMsg ->
-                                                updateLogs += logMsg
-                                            }
-                                            isUpdating = false
-                                            updateSuccess = success
-                                            refreshStatus()
-                                        }
-                                    },
-                                    onCheckUpdate = { nightly ->
-                                        showUpdateDialog = true
-                                        isUpdating = true
-                                        updateLogs = if (nightly) "Updating yt-dlp to nightly channel...\n" else "Checking for yt-dlp updates...\n"
-                                        updateSuccess = null
-                                        scope.launch {
-                                            val success = ytDlClient.runUpdate(nightly) { logMsg ->
-                                                updateLogs += logMsg
-                                            }
-                                            isUpdating = false
-                                            updateSuccess = success
-                                            refreshStatus()
-                                        }
-                                    }
-                                )
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                Icon(Icons.Outlined.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Built-in yt-dlp", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        text = ytdlpStatus?.version?.let { "Ready · yt-dlp $it" } ?: "Included in this player",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text("Scraper and player are in one app. Updates arrive with player releases.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                                }
+                                if (isRefreshingStatus) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                             }
                         }
                     }
-
                     // Section 2: Quality & Codec Preferences
                     item {
                         PreferenceSectionHeader(title = "Stream Quality")
