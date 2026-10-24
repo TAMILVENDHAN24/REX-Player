@@ -37,8 +37,8 @@ def _options(raw):
         "geo_bypass": bool(request.get("geo_bypass", True)),
         "http_headers": headers,
     }
-    if CURL_CFFI_AVAILABLE:
-        opts["impersonate"] = "chrome"
+    # Avoid forcing a global target: some Android curl-cffi builds crash during
+    # yt-dlp target validation. Extractors may request impersonation as needed.
     if request.get("format"):
         opts["format"] = request["format"]
     if request.get("proxy"):
