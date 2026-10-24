@@ -1,21 +1,16 @@
 package xyz.mpv.rex.domain.ytdl
 
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.IBinder
+import android.os.Bundle
 import android.util.Log
-import kotlinx.coroutines.CompletableDeferred
+import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import xyz.mpv.rex.addon.ytdl.ipc.IYtDlCallback
-import xyz.mpv.rex.addon.ytdl.ipc.IYtDlService
+import org.json.JSONObject
 import xyz.mpv.rex.domain.ytdl.ipc.YtdlIpcConverter
 import xyz.mpv.rex.domain.ytdl.model.ResolvedPlaylist
 import xyz.mpv.rex.domain.ytdl.model.ResolvedStream
@@ -28,299 +23,123 @@ class YtDlClient(
     private val context: Context,
     private val preferences: YtdlPreferences? = null,
 ) {
-    private val mutex = Mutex()
-    private var boundService: IYtDlService? = null
-    private var serviceConnection: ServiceConnection? = null
+    private val pythonMutex = Mutex()
 
-    fun isAddonInstalled(): Boolean {
-        return try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                context.packageManager.getPackageInfo(
-                    ADDON_PACKAGE,
-                    PackageManager.PackageInfoFlags.of(0)
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                context.packageManager.getPackageInfo(ADDON_PACKAGE, 0)
-            }
-            true
-        } catch (e: PackageManager.NameNotFoundException) {
-            false
-        }
-    }
-
-    /**
-     * Cryptographically verifies that the installed add-on package is signed by
-     * the exact same developer certificate as REX Player.
-     */
-    fun isAddonAuthentic(): Boolean {
-        if (!isAddonInstalled()) return false
-        val match = context.packageManager.checkSignatures(context.packageName, ADDON_PACKAGE)
-        if (match == PackageManager.SIGNATURE_MATCH) {
-            return true
-        }
-        Log.e(TAG, "Add-on signature verification failed (result: $match). Refusing to trust $ADDON_PACKAGE.")
-        return false
-    }
+    fun isAddonInstalled(): Boolean = true
+    fun isAddonAuthentic(): Boolean = true
 
     fun isKnownWebPlatform(url: String): Boolean {
-        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
-        val host = uri.host?.lowercase() ?: return false
-
-        // 1. Built-in known web platforms
-        if (KNOWN_WEB_PLATFORMS.any { platform ->
-            host == platform || host.endsWith(".$platform")
-        }) {
-            return true
-        }
-
-        // 2. User-configured custom domains from settings
-        val custom = preferences?.getParsedCustomDomains().orEmpty()
-        if (custom.any { domain ->
-            host == domain || host.endsWith(".$domain")
-        }) {
-            return true
-        }
-
-        return false
+        val host = runCatching { Uri.parse(url).host?.lowercase() }.getOrNull() ?: return false
+        return KNOWN_WEB_PLATFORMS.any { host == it || host.endsWith(".$it") } ||
+            preferences?.getParsedCustomDomains().orEmpty().any { host == it || host.endsWith(".$it") }
     }
 
-    /**
-     * Checks if a URL is a web streaming URL (e.g. YouTube, Vimeo, Twitch)
-     * that requires the yt-dlp extractor add-on.
-     *
-     * Direct media files (.mp4, .mkv, .m3u8, etc.), local network streams,
-     * and generic streaming URLs (IPTV, Icecast, raw HTTP streams) do NOT require yt-dlp
-     * and can be played directly by MPV.
-     */
     fun requiresYtdl(url: String): Boolean {
         val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
-        val scheme = uri.scheme?.lowercase() ?: return false
-        if (scheme != "http" && scheme != "https") return false
-
-        // Loopback / local proxies are never processed by yt-dlp
-        val host = uri.host?.lowercase() ?: ""
-        if (host == "localhost" || host == "127.0.0.1" || host.startsWith("192.168.") || host.startsWith("10.")) {
-            return false
-        }
-
-        // Direct media extensions (.mp4, .mkv, .m3u8, etc.) can be played directly by MPV
-        if (HttpUtils.isDirectMediaUrl(uri)) {
-            return false
-        }
-
-        // Only known web video platforms require yt-dlp extraction
+        if (uri.scheme?.lowercase() !in setOf("http", "https")) return false
+        val host = uri.host?.lowercase().orEmpty()
+        if (host == "localhost" || host == "127.0.0.1" || host.startsWith("192.168.") || host.startsWith("10.")) return false
+        if (HttpUtils.isDirectMediaUrl(uri)) return false
         return isKnownWebPlatform(url)
     }
 
-    private suspend fun getService(): IYtDlService? = mutex.withLock {
-        boundService?.let { return it }
+    private fun module() : Python {
+        if (!Python.isStarted()) Python.start(AndroidPlatform(context.applicationContext))
+        return Python.getInstance()
+    }
 
-        if (!isAddonInstalled()) {
-            Log.w(TAG, "Addon $ADDON_PACKAGE is not installed")
-            return null
-        }
+    private fun optionsJson(options: StreamExtractionOptions): String = JSONObject().apply {
+        put("format", options.format)
+        put("user_agent", options.userAgent)
+        put("referer", options.referer)
+        put("proxy", options.proxy)
+        put("cookies_file", options.cookiesFilePath)
+        put("extractor_args", options.extractorArgs)
+        put("geo_bypass", options.geoBypass)
+    }.toString()
 
-        if (!isAddonAuthentic()) {
-            Log.e(TAG, "Refusing to connect: $ADDON_PACKAGE is not authentic (signature mismatch)")
-            return null
-        }
-
-        val deferred = CompletableDeferred<IYtDlService?>()
-        val connection = object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                Log.d(TAG, "Connected to YtDlRemoteService")
-                val aidl = IYtDlService.Stub.asInterface(service)
-                boundService = aidl
-                deferred.complete(aidl)
+    private fun resultBundle(json: String): Bundle {
+        val obj = JSONObject(json)
+        return Bundle().apply {
+            putBoolean("is_success", obj.optBoolean("is_success"))
+            putString("video_url", obj.optString("video_url").takeUnless { it == "null" })
+            putString("audio_url", obj.optString("audio_url").takeUnless { it == "null" })
+            putString("title", obj.optString("title").takeUnless { it == "null" })
+            putInt("duration", obj.optInt("duration"))
+            putString("thumbnail", obj.optString("thumbnail").takeUnless { it == "null" })
+            putString("uploader", obj.optString("uploader").takeUnless { it == "null" })
+            putString("error_message", obj.optString("error_message").takeUnless { it == "null" })
+            putString("video_qualities_json", obj.optString("video_qualities_json", "[]"))
+            putString("audio_tracks_json", obj.optString("audio_tracks_json", "[]"))
+            putString("entries_json", obj.optString("entries_json", "[]"))
+            putString("source_url", obj.optString("source_url"))
+            val headers = Bundle()
+            obj.optJSONObject("http_headers")?.let { values ->
+                values.keys().forEach { key -> headers.putString(key, values.optString(key)) }
             }
-
-            override fun onServiceDisconnected(name: ComponentName?) {
-                Log.d(TAG, "Disconnected from YtDlRemoteService")
-                boundService = null
+            putBundle("http_headers", headers)
+            val subtitles = Bundle()
+            obj.optJSONObject("subtitles")?.let { values ->
+                values.keys().forEach { key -> subtitles.putString(key, values.optString(key)) }
             }
+            putBundle("subtitles", subtitles)
         }
-
-        val intent = Intent(ACTION_BIND).apply {
-            setPackage(ADDON_PACKAGE)
-        }
-
-        val bound = try {
-            context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to bind to $ADDON_PACKAGE", e)
-            false
-        }
-
-        if (!bound) {
-            return null
-        }
-
-        serviceConnection = connection
-        return withTimeoutOrNull(BIND_TIMEOUT_MS) { deferred.await() }
     }
 
     suspend fun isEngineReady(): Boolean = withContext(Dispatchers.IO) {
-        val service = getService() ?: return@withContext false
-        try {
-            service.isReady
-        } catch (e: Exception) {
-            Log.e(TAG, "Error checking isReady", e)
-            false
-        }
+        runCatching { pythonMutex.withLock { module().getModule("rex_ytdlp").callAttr("version") }; true }
+            .onFailure { Log.e(TAG, "Bundled yt-dlp runtime failed to start", it) }.getOrDefault(false)
+    }
+
+    suspend fun supportsBrowserImpersonation(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            pythonMutex.withLock { module().getModule("rex_ytdlp").callAttr("supports_impersonation").toJava(Boolean::class.javaObjectType) }
+        }.getOrDefault(false)
     }
 
     suspend fun getStatus(): YtdlpStatus = withContext(Dispatchers.IO) {
-        if (!isAddonInstalled()) return@withContext YtdlpStatus.NotInstalled
-        val service = getService() ?: return@withContext YtdlpStatus.NotInstalled
-        try {
-            val bundle = service.status
-            YtdlIpcConverter.parseStatus(bundle)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error getting status", e)
+        runCatching {
+            val version = pythonMutex.withLock { module().getModule("rex_ytdlp").callAttr("version").toJava(String::class.java) }
+            YtdlpStatus(isInstalled = true, version = version, channel = "Bundled", origin = "REX Player")
+        }.getOrElse {
+            Log.e(TAG, "Unable to read bundled yt-dlp version", it)
             YtdlpStatus.NotInstalled
         }
     }
 
-    suspend fun resolveStream(
-        url: String,
-        options: StreamExtractionOptions = StreamExtractionOptions(),
-    ): ResolvedStream = withContext(Dispatchers.IO) {
-        if (!isAddonInstalled()) {
-            return@withContext ResolvedStream.failure("REX Ytdlp is not installed")
-        }
-        val service = getService()
-            ?: return@withContext ResolvedStream.failure("Could not connect to REX Ytdlp")
-
-        // Interface v2 adds audio_tracks_json. Older addons omit it; the parser defaults
-        // audioTracks to emptyList(), so this is a diagnostic log, not a hard gate.
-        val addonVersion = runCatching { service.addonVersion }.getOrDefault(0)
-        if (addonVersion < 2) {
-            Log.d(TAG, "Add-on interface v$addonVersion: alternate audio tracks unavailable")
-        }
-
-        try {
-            val optionsBundle = YtdlIpcConverter.toOptionsBundle(options)
-            val resultBundle = service.resolveStream(url, optionsBundle)
-            YtdlIpcConverter.parseResolvedStream(resultBundle)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error resolving stream for $url", e)
-            ResolvedStream.failure("IPC resolution error: ${e.message}")
+    suspend fun resolveStream(url: String, options: StreamExtractionOptions = StreamExtractionOptions()): ResolvedStream = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = pythonMutex.withLock {
+                module().getModule("rex_ytdlp").callAttr("resolve", url, optionsJson(options)).toJava(String::class.java)
+            }
+            YtdlIpcConverter.parseResolvedStream(resultBundle(json))
+        }.getOrElse {
+            Log.e(TAG, "Bundled yt-dlp failed to resolve $url", it)
+            ResolvedStream.failure(it.message ?: "yt-dlp extraction failed")
         }
     }
 
-    suspend fun extractPlaylist(
-        url: String,
-        options: StreamExtractionOptions = StreamExtractionOptions(),
-    ): ResolvedPlaylist = withContext(Dispatchers.IO) {
-        if (!isAddonInstalled()) {
-            return@withContext ResolvedPlaylist.failure(url, "REX Ytdlp is not installed")
-        }
-        val service = getService()
-            ?: return@withContext ResolvedPlaylist.failure(url, "Could not connect to REX Ytdlp")
-
-        try {
-            val optionsBundle = YtdlIpcConverter.toOptionsBundle(options)
-            val resultBundle = service.extractPlaylist(url, optionsBundle)
-            YtdlIpcConverter.parseResolvedPlaylist(resultBundle)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error extracting playlist for $url", e)
-            ResolvedPlaylist.failure(url, "IPC playlist extraction error: ${e.message}")
+    suspend fun extractPlaylist(url: String, options: StreamExtractionOptions = StreamExtractionOptions()): ResolvedPlaylist = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = pythonMutex.withLock {
+                module().getModule("rex_ytdlp").callAttr("playlist", url, optionsJson(options)).toJava(String::class.java)
+            }
+            YtdlIpcConverter.parseResolvedPlaylist(resultBundle(json))
+        }.getOrElse {
+            Log.e(TAG, "Bundled yt-dlp failed to extract playlist $url", it)
+            ResolvedPlaylist.failure(url, it.message ?: "Playlist extraction failed")
         }
     }
 
-    suspend fun runInstall(onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
-        val service = getService() ?: return@withContext false
-        val deferred = CompletableDeferred<Boolean>()
-
-        val callback = object : IYtDlCallback.Stub() {
-            override fun onLog(message: String?) {
-                message?.let(onLog)
-            }
-
-            override fun onComplete(success: Boolean, message: String?) {
-                message?.let(onLog)
-                deferred.complete(success)
-            }
-        }
-
-        try {
-            service.runInstall(callback)
-            deferred.await()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error running install", e)
-            false
-        }
-    }
-
-    suspend fun runUpdate(nightly: Boolean, onLog: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
-        val service = getService() ?: return@withContext false
-        val deferred = CompletableDeferred<Boolean>()
-
-        val callback = object : IYtDlCallback.Stub() {
-            override fun onLog(message: String?) {
-                message?.let(onLog)
-            }
-
-            override fun onComplete(success: Boolean, message: String?) {
-                message?.let(onLog)
-                deferred.complete(success)
-            }
-        }
-
-        try {
-            service.runUpdate(nightly, callback)
-            deferred.await()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error running update", e)
-            false
-        }
-    }
-
-    fun unbind() {
-        mutex.tryLock()
-        try {
-            serviceConnection?.let {
-                runCatching { context.unbindService(it) }
-            }
-            serviceConnection = null
-            boundService = null
-        } finally {
-            runCatching { mutex.unlock() }
-        }
-    }
+    fun unbind() = Unit
 
     companion object {
         private const val TAG = "YtDlClient"
-        const val ADDON_PACKAGE = "xyz.mpv.rex.addon.ytdl"
-        const val ACTION_BIND = "xyz.mpv.rex.addon.ytdl.BIND_SERVICE"
-        private const val BIND_TIMEOUT_MS = 10_000L
-
         val KNOWN_WEB_PLATFORMS = setOf(
-            "youtube.com",
-            "youtu.be",
-            "yt.be",
-            "youtube-nocookie.com",
-            "vimeo.com",
-            "twitch.tv",
-            "dailymotion.com",
-            "dai.ly",
-            "tiktok.com",
-            "twitter.com",
-            "x.com",
-            "facebook.com",
-            "fb.watch",
-            "instagram.com",
-            "bilibili.com",
-            "b23.tv",
-            "soundcloud.com",
-            "odysee.com",
-            "rumble.com",
-            "streamable.com",
-            "reddit.com",
-            "v.redd.it",
-            "nicovideo.jp",
-            "kick.com",
+            "youtube.com", "youtu.be", "yt.be", "youtube-nocookie.com", "vimeo.com", "twitch.tv",
+            "dailymotion.com", "dai.ly", "tiktok.com", "twitter.com", "x.com", "facebook.com",
+            "fb.watch", "instagram.com", "bilibili.com", "b23.tv", "soundcloud.com", "odysee.com",
+            "rumble.com", "streamable.com", "reddit.com", "v.redd.it", "nicovideo.jp", "kick.com",
         )
     }
 }
