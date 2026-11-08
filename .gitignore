@@ -16,3 +16,8 @@ compile_release.sh
 remote.log
 mpvRex-libmpv/
 REX-Ytdlp/
+
+# Python bytecode / test caches (never package into the APK)
+__pycache__/
+*.pyc
+.pytest_cache/

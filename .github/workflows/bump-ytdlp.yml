@@ -1,0 +1,64 @@
+name: Bump bundled yt-dlp
+
+# The Player bundles a pinned yt-dlp (app/build.gradle.kts). Sites such as
+# Dailymotion/YouTube change often, so a stale pin eventually breaks playback.
+# This opens a PR with the latest PyPI release, but only if the bridge's
+# regression tests pass against that release.
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'   # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find current pin and latest release
+        id: ver
+        run: |
+          current=$(grep -oP 'yt-dlp==\K[0-9.]+' app/build.gradle.kts | head -1)
+          latest=$(curl -fsS https://pypi.org/pypi/yt-dlp/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])")
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "pinned: $current / latest: $latest"
+
+      - name: Set up Python
+        if: steps.ver.outputs.current != steps.ver.outputs.latest
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Run bridge regression tests against the new yt-dlp
+        if: steps.ver.outputs.current != steps.ver.outputs.latest
+        run: |
+          curl_cffi=$(grep -oP 'curl-cffi==\K[0-9.]+' app/build.gradle.kts | head -1)
+          pip install "yt-dlp==${{ steps.ver.outputs.latest }}" "curl-cffi==${curl_cffi}" pytest
+          python -m pytest scripts/test_rex_ytdlp.py -v
+
+      - name: Update pin
+        if: steps.ver.outputs.current != steps.ver.outputs.latest
+        run: |
+          sed -i "s/yt-dlp==${{ steps.ver.outputs.current }}/yt-dlp==${{ steps.ver.outputs.latest }}/" app/build.gradle.kts
+
+      - name: Open pull request
+        if: steps.ver.outputs.current != steps.ver.outputs.latest
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/bump-ytdlp-${{ steps.ver.outputs.latest }}
+          commit-message: "chore(ytdl): bump bundled yt-dlp to ${{ steps.ver.outputs.latest }}"
+          title: "chore(ytdl): bump bundled yt-dlp to ${{ steps.ver.outputs.latest }}"
+          body: |
+            Bumps the bundled yt-dlp from `${{ steps.ver.outputs.current }}` to `${{ steps.ver.outputs.latest }}`.
+
+            `scripts/test_rex_ytdlp.py` passed against this version with the pinned curl-cffi.
+
+            Before merging: confirm the pinned `curl-cffi` is still inside yt-dlp's supported
+            range (see `yt_dlp/networking/_curlcffi.py`), then run "Test URL Extraction" on a device.

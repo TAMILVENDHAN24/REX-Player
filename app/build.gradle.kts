@@ -7,11 +7,27 @@ plugins {
   alias(libs.plugins.kotlinx.serialization)
   alias(libs.plugins.ksp)
   alias(libs.plugins.room)
+  id("com.chaquo.python")
 }
 
 android {
   namespace = "xyz.mpv.rex"
   compileSdk = 36
+
+  flavorDimensions += "python"
+  productFlavors {
+    create("standard") {
+      dimension = "python"
+      ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64") }
+      buildConfigField("boolean", "YTDLP_IMPERSONATION_SUPPORTED", "false")
+    }
+    create("impersonation") {
+      dimension = "python"
+      // curl-cffi Android binaries are provided for arm64 only.
+      ndk { abiFilters += "arm64-v8a" }
+      buildConfigField("boolean", "YTDLP_IMPERSONATION_SUPPORTED", "true")
+    }
+  }
 
   defaultConfig {
     applicationId = "xyz.mpv.rex"
@@ -105,6 +121,14 @@ android {
     aidl = true
   }
 
+  // QuickJS runtime (libqjs.so) used by yt-dlp to solve YouTube n/sig challenges.
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+      version = "3.22.1"
+    }
+  }
+
   packaging {
     resources {
       excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -122,6 +146,25 @@ android {
   @Suppress("UnstableApiUsage")
   androidResources {
     generateLocaleConfig = true
+  }
+}
+
+chaquopy {
+  defaultConfig {
+    version = "3.11"
+    pip { install("yt-dlp==2026.10.26") }
+  }
+  productFlavors {
+    getByName("impersonation") {
+      version = "3.13"
+      pip {
+        options("--extra-index-url", "https://pypi.flet.dev")
+        install("cffi==2.1.1")
+        // yt-dlp only accepts curl_cffi 0.10.x-0.17.x (checked against yt-dlp 2026.10.26);
+        // outside that range impersonation is silently disabled. Re-check when bumping.
+        install("curl-cffi==0.16.3")
+      }
+    }
   }
 }
 

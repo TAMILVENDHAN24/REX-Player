@@ -94,7 +94,8 @@ object AboutScreen : Screen {
     val packageManager: PackageManager = context.packageManager
     val packageInfo = packageManager.getPackageInfo(context.packageName, 0)
     val versionName = packageInfo.versionName?.substringBefore('-') ?: packageInfo.versionName
-    val buildType = BuildConfig.BUILD_TYPE
+    // Debug builds show just the version; other build types keep their label.
+    val buildType = BuildConfig.BUILD_TYPE.takeUnless { it == "debug" }.orEmpty()
 
     LaunchedEffect(updateState) {
         when (updateState) {
@@ -209,7 +210,7 @@ object AboutScreen : Screen {
                       )
                       Spacer(Modifier.height(4.dp))
                       Text(
-                        text = "v$versionName $buildType",
+                        text = "v$versionName $buildType".trim(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = cs.onPrimaryContainer.copy(alpha = 0.85f),
                       )
