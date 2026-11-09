@@ -45,7 +45,7 @@ _IMPERSONATE_FALLBACKS = ("chrome", "firefox")
 _TRANSIENT_MARKERS = (
     "connection reset", "errno 104", "connection aborted", "remote end closed",
     "timed out", "timeout", "transporterror", "eof occurred", "ssl", "handshake",
-    "recv failure", "curl: (", "http error 403", "http error 429",
+    "recv failure", "curl: (", "http error 401", "http error 403", "http error 429",
 )
 
 _SAFE_HEADERS = ("user-agent", "referer", "cookie", "origin")
@@ -369,15 +369,33 @@ class ExtractionFailed(Exception):
     """Carries yt-dlp's original error text plus a summary of every attempt."""
 
 
+class _StepLog:
+    """yt-dlp logger that remembers the last status lines (e.g. which API call
+    was being made), so a failure can say where it happened."""
+
+    def __init__(self):
+        self.lines = []
+
+    def _add(self, message):
+        text = re.sub(r"\s+", " ", str(message)).strip()
+        if text and not text.startswith(("[debug]", "ERROR:")):
+            self.lines.append(text[:140])
+
+    debug = info = warning = error = _add
+
+
 def _extract(url, base_opts):
     host = _host(url)
     attempts = []
     last_exc = None
+    last_steps = []
     saw_transient = False
 
     for target in _plan(host):
         label = target or "default"
         opts = dict(base_opts)
+        steps = _StepLog()
+        opts["logger"] = steps
         if target:
             try:
                 from yt_dlp.networking.impersonate import ImpersonateTarget
@@ -396,6 +414,7 @@ def _extract(url, base_opts):
                 info = ydl.extract_info(url, download=False)
         except Exception as exc:
             last_exc = exc
+            last_steps = steps.lines[-6:]
             attempts.append("%s: %s" % (label, _short(exc)))
             if _is_transient(exc):
                 saw_transient = True
@@ -414,6 +433,8 @@ def _extract(url, base_opts):
     message = str(last_exc) if last_exc is not None else "; ".join(attempts)
     if len(attempts) > 1 or saw_transient:
         message += "\n\nAttempts: " + "; ".join(attempts)
+        if last_steps:
+            message += "\nLast steps: " + " | ".join(last_steps)
         message += "\nEngine: " + engine_info()
     raise ExtractionFailed(message)
 

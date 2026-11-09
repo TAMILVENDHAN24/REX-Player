@@ -538,3 +538,77 @@ def test_real_github_release_downloads_and_loads(tmp_path, nightly):
             assert r._impersonation_handler_available() in (True, False)
     finally:
         r._swap_engine(None)
+
+
+# ------------------------------------------- 401 retry and failure steps ---
+
+UNAUTHORIZED = Exception("ERROR: [dailymotion] x: Unable to download JSON metadata: "
+                         "HTTP Error 401: Unauthorized (caused by <HTTPError 401: Unauthorized>)")
+
+
+def test_401_is_retried_with_impersonation(fake_ydl):
+    fake_ydl.script = {None: UNAUTHORIZED, "chrome": {"id": "ok"}}
+    assert r._extract("https://www.dailymotion.com/video/x1", {}) == {"id": "ok"}
+    assert fake_ydl.calls == [None, "chrome"]
+
+
+def _serve_status(status_for):
+    """Tiny HTTP server; status_for(head_text) -> 200 (video) or another status."""
+    def serve(sock):
+        while True:
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return
+            conn.settimeout(5)
+            data = b""
+            try:
+                while b"\r\n\r\n" not in data:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+            except Exception:
+                pass
+            head = data.decode("latin1").lower()
+            code = status_for(head)
+            if code == 200:
+                body = b"\x00" * 2048
+                resp = (b"HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: %d\r\n"
+                        b"Connection: close\r\n\r\n" % len(body))
+                conn.sendall(resp + (b"" if head.startswith("head") else body))
+            else:
+                conn.sendall(b"HTTP/1.1 %d Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" % code)
+            conn.close()
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    threading.Thread(target=serve, args=(srv,), daemon=True).start()
+    return srv, "http://127.0.0.1:%d/clip.mp4" % srv.getsockname()[1]
+
+
+def test_end_to_end_plain_gets_401_then_impersonated_succeeds():
+    pytest.importorskip("curl_cffi")
+    srv, url = _serve_status(lambda head: 200 if "sec-ch-ua" in head else 401)
+    try:
+        out = json.loads(r.resolve(url, "{}"))
+    finally:
+        srv.close()
+    assert out["is_success"] is True, out
+    assert r._preferred_target.get("127.0.0.1") == "chrome"
+
+
+def test_failure_message_reports_status_attempts_and_last_steps():
+    pytest.importorskip("curl_cffi")
+    srv, url = _serve_status(lambda head: 401)  # nothing can get through
+    try:
+        out = json.loads(r.resolve(url, "{}"))
+    finally:
+        srv.close()
+    msg = out["error_message"]
+    assert out["is_success"] is False
+    assert "401" in msg
+    assert "Attempts:" in msg and "default:" in msg and "chrome:" in msg
+    assert "Last steps:" in msg and "[generic]" in msg
+    assert "Engine:" in msg
