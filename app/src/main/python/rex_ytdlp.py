@@ -50,8 +50,9 @@ _TRANSIENT_MARKERS = (
 
 _SAFE_HEADERS = ("user-agent", "referer", "cookie", "origin")
 
-# host -> impersonation client that worked after the plain attempt failed
+# host -> the request target that worked most recently in this process
 _preferred_target = {}
+_PLAIN_TARGET = "default"
 
 
 # --------------------------------------------------------------------------
@@ -354,11 +355,23 @@ def _host(url):
         return ""
 
 
+def _is_dailymotion_host(host):
+    host = (host or "").lower().rstrip(".")
+    labels = host.split(".")
+    return host == "dai.ly" or host.endswith(".dai.ly") or (
+        len(labels) >= 2 and labels[-2] == "dailymotion"
+    )
+
+
 def _plan(host):
     plan = [None]
     if _impersonation_handler_available():
         plan += list(_IMPERSONATE_FALLBACKS)
         preferred = _preferred_target.get(host)
+        if preferred == _PLAIN_TARGET:
+            preferred = None
+        elif preferred is None and _is_dailymotion_host(host):
+            preferred = "chrome"
         if preferred in plan:
             plan.remove(preferred)
             plan.insert(0, preferred)
@@ -424,10 +437,13 @@ def _extract(url, base_opts):
             attempts.append("%s: yt-dlp returned no data" % label)
             last_exc = RuntimeError("yt-dlp returned no data")
             break
-        if target and attempts:
+        if target:
             _preferred_target[host] = target
         elif target is None:
-            _preferred_target.pop(host, None)
+            if _is_dailymotion_host(host) and attempts:
+                _preferred_target[host] = _PLAIN_TARGET
+            elif _preferred_target.get(host) != _PLAIN_TARGET:
+                _preferred_target.pop(host, None)
         return ydl.sanitize_info(info)
 
     message = str(last_exc) if last_exc is not None else "; ".join(attempts)

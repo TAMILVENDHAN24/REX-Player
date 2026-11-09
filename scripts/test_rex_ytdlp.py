@@ -546,10 +546,10 @@ UNAUTHORIZED = Exception("ERROR: [dailymotion] x: Unable to download JSON metada
                          "HTTP Error 401: Unauthorized (caused by <HTTPError 401: Unauthorized>)")
 
 
-def test_401_is_retried_with_impersonation(fake_ydl):
+def test_dailymotion_tries_impersonation_first(fake_ydl):
     fake_ydl.script = {None: UNAUTHORIZED, "chrome": {"id": "ok"}}
     assert r._extract("https://www.dailymotion.com/video/x1", {}) == {"id": "ok"}
-    assert fake_ydl.calls == [None, "chrome"]
+    assert fake_ydl.calls == ["chrome"]
 
 
 def _serve_status(status_for):
