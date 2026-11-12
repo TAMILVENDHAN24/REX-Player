@@ -378,6 +378,19 @@ def _plan(host):
     return plan
 
 
+def _is_unauthorized(exc):
+    return "http error 401" in str(exc).lower()
+
+
+def _reset_extractor_state():
+    """Clear yt-dlp's process-wide Dailymotion authorization header."""
+    try:
+        from yt_dlp.extractor.dailymotion import DailymotionBaseInfoExtractor
+        DailymotionBaseInfoExtractor._HEADERS.pop("Authorization", None)
+    except Exception:
+        pass  # Support yt-dlp versions where the extractor internals changed.
+
+
 class ExtractionFailed(Exception):
     """Carries yt-dlp's original error text plus a summary of every attempt."""
 
@@ -416,35 +429,47 @@ def _extract(url, base_opts):
             except Exception as exc:
                 attempts.append("%s: unavailable (%s)" % (label, _short(exc)))
                 continue
-        try:
-            # yt-dlp raises here if the requested target cannot be used.
-            ydl = yt_dlp.YoutubeDL(opts)
-        except Exception as exc:
-            attempts.append("%s: cannot start (%s)" % (label, _short(exc)))
-            continue
-        try:
-            with ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception as exc:
-            last_exc = exc
-            last_steps = steps.lines[-6:]
-            attempts.append("%s: %s" % (label, _short(exc)))
-            if _is_transient(exc):
-                saw_transient = True
-                continue
-            break
-        if info is None:
-            attempts.append("%s: yt-dlp returned no data" % label)
-            last_exc = RuntimeError("yt-dlp returned no data")
-            break
-        if target:
-            _preferred_target[host] = target
-        elif target is None:
-            if _is_dailymotion_host(host) and attempts:
+        outcome = None  # None: try next target; "stop": do not retry a permanent error.
+        for refreshed in (False, True):
+            try:
+                # yt-dlp raises here if the requested target cannot be used.
+                ydl = yt_dlp.YoutubeDL(opts)
+            except Exception as exc:
+                attempts.append("%s: cannot start (%s)" % (label, _short(exc)))
+                break
+            try:
+                with ydl:
+                    info = ydl.extract_info(url, download=False)
+            except Exception as exc:
+                last_exc = exc
+                last_steps = steps.lines[-6:]
+                if refreshed:
+                    attempts[-1] = "%s (after token refresh): %s" % (label, _short(exc))
+                else:
+                    attempts.append("%s: %s" % (label, _short(exc)))
+                if _is_dailymotion_host(host) and _is_unauthorized(exc) and not refreshed:
+                    # The extractor reuses its class-level token for this app process.
+                    _reset_extractor_state()
+                    continue
+                if _is_transient(exc):
+                    saw_transient = True
+                else:
+                    outcome = "stop"
+                break
+            if info is None:
+                attempts.append("%s: yt-dlp returned no data" % label)
+                last_exc = RuntimeError("yt-dlp returned no data")
+                outcome = "stop"
+                break
+            if target:
+                _preferred_target[host] = target
+            elif _is_dailymotion_host(host) and attempts:
                 _preferred_target[host] = _PLAIN_TARGET
             elif _preferred_target.get(host) != _PLAIN_TARGET:
                 _preferred_target.pop(host, None)
-        return ydl.sanitize_info(info)
+            return ydl.sanitize_info(info)
+        if outcome == "stop":
+            break
 
     message = str(last_exc) if last_exc is not None else "; ".join(attempts)
     if len(attempts) > 1 or saw_transient:

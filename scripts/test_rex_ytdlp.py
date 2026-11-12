@@ -609,6 +609,7 @@ def test_failure_message_reports_status_attempts_and_last_steps():
     msg = out["error_message"]
     assert out["is_success"] is False
     assert "401" in msg
-    assert "Attempts:" in msg and "default:" in msg and "chrome:" in msg
+    assert "Attempts:" in msg
+    assert "default (after token refresh):" in msg and "chrome (after token refresh):" in msg
     assert "Last steps:" in msg and "[generic]" in msg
     assert "Engine:" in msg
